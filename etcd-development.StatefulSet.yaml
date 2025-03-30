@@ -1,0 +1,327 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: etcd
+  namespace: etcd-development
+spec:
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  podManagementPolicy: Parallel
+  replicas: 3
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: etcd
+  serviceName: etcd-discovery
+  template:
+    metadata:
+      labels:
+        app: etcd
+    spec:
+      containers:
+      - command:
+        - /bin/sh
+        - -c
+        - |2
+
+          CLUSTER_STATE="new"
+          if [[ -f /etc/etcd/clusterstate/existing ]]; then
+            CLUSTER_STATE="existing"
+          fi
+
+          /usr/bin/etcd \
+          --data-dir=/var/lib/data \
+          --name=${HOSTNAME} \
+          --initial-advertise-peer-urls=https://${HOSTNAME}.etcd-discovery.${NAMESPACE}.svc:2380 \
+          --listen-peer-urls=https://${POD_IP}:2380 \
+          --listen-client-urls=https://${POD_IP}:2379,https://localhost:2379 \
+          --advertise-client-urls=https://${HOSTNAME}.etcd-discovery.${NAMESPACE}.svc:2379 \
+          --listen-metrics-urls=https://0.0.0.0:2382 \
+          --initial-cluster-token=etcd-cluster \
+          --initial-cluster=${INITIAL_CLUSTER} \
+          --initial-cluster-state=${CLUSTER_STATE} \
+          --quota-backend-bytes=${QUOTA_BACKEND_BYTES} \
+          --snapshot-count=10000 \
+          --peer-client-cert-auth=true \
+          --peer-cert-file=/etc/etcd/tls/peer/peer.crt \
+          --peer-key-file=/etc/etcd/tls/peer/peer.key \
+          --peer-trusted-ca-file=/etc/etcd/tls/etcd-ca/ca.crt \
+          --client-cert-auth=true \
+          --cert-file=/etc/etcd/tls/server/server.crt \
+          --key-file=/etc/etcd/tls/server/server.key \
+          --trusted-ca-file=/etc/etcd/tls/etcd-ca/ca.crt
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: INITIAL_CLUSTER
+          value: etcd-0=https://etcd-0.etcd-discovery.etcd-development.svc:2380,etcd-1=https://etcd-1.etcd-discovery.etcd-development.svc:2380,etcd-2=https://etcd-2.etcd-discovery.etcd-development.svc:2380
+        - name: QUOTA_BACKEND_BYTES
+          value: "8589934592"
+        image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:52a19d768ecd6dddb18ad633b2911615242956645a14f96d340834ef872e8768
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: healthz
+            port: 9980
+            scheme: HTTPS
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 30
+        name: etcd
+        ports:
+        - containerPort: 2379
+          name: client
+          protocol: TCP
+        - containerPort: 2380
+          name: peer
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 15
+          httpGet:
+            path: readyz
+            port: 9980
+            scheme: HTTPS
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 10
+        resources:
+          requests:
+            cpu: 300m
+            memory: 600Mi
+        startupProbe:
+          failureThreshold: 18
+          httpGet:
+            path: readyz
+            port: 9980
+            scheme: HTTPS
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 10
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/lib
+          name: data
+        - mountPath: /etc/etcd/tls/peer
+          name: peer-tls
+        - mountPath: /etc/etcd/tls/server
+          name: server-tls
+        - mountPath: /etc/etcd/tls/client
+          name: client-tls
+        - mountPath: /etc/etcd/tls/etcd-ca
+          name: etcd-ca
+        - mountPath: /etc/etcd/clusterstate
+          name: cluster-state
+      - command:
+        - /bin/sh
+        - -c
+        - |2
+
+          etcd grpc-proxy start \
+          --endpoints https://localhost:2382 \
+          --metrics-addr https://0.0.0.0:2381 \
+          --listen-addr 127.0.0.1:2383 \
+          --advertise-client-url ""  \
+          --key /etc/etcd/tls/peer/peer.key \
+          --key-file /etc/etcd/tls/server/server.key \
+          --cert /etc/etcd/tls/peer/peer.crt \
+          --cert-file /etc/etcd/tls/server/server.crt \
+          --cacert /etc/etcd/tls/etcd-ca/ca.crt \
+          --trusted-ca-file /etc/etcd/tls/etcd-metrics-ca/ca.crt
+        image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:52a19d768ecd6dddb18ad633b2911615242956645a14f96d340834ef872e8768
+        imagePullPolicy: IfNotPresent
+        name: etcd-metrics
+        ports:
+        - containerPort: 2381
+          name: metrics
+          protocol: TCP
+        resources:
+          requests:
+            cpu: 40m
+            memory: 200Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /etc/etcd/tls/peer
+          name: peer-tls
+        - mountPath: /etc/etcd/tls/server
+          name: server-tls
+        - mountPath: /etc/etcd/tls/etcd-ca
+          name: etcd-ca
+        - mountPath: /etc/etcd/tls/etcd-metrics-ca
+          name: etcd-metrics-ca
+      - args:
+        - readyz
+        - --target=https://localhost:2379
+        - --listen-port=9980
+        - --serving-cert-file=/etc/etcd/tls/server/server.crt
+        - --serving-key-file=/etc/etcd/tls/server/server.key
+        - --client-cert-file=/etc/etcd/tls/client/etcd-client.crt
+        - --client-key-file=/etc/etcd/tls/client/etcd-client.key
+        - --client-cacert-file=/etc/etcd/tls/etcd-ca/ca.crt
+        command:
+        - cluster-etcd-operator
+        image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:0594e1cf0e39930ca7ed0a93ac69d9de5ccad66bc0505c85285bff0118fc5c51
+        imagePullPolicy: IfNotPresent
+        name: healthz
+        ports:
+        - containerPort: 9980
+          name: healthz
+          protocol: TCP
+        resources:
+          requests:
+            cpu: 10m
+            memory: 50Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /etc/etcd/tls/server
+          name: server-tls
+        - mountPath: /etc/etcd/tls/client
+          name: client-tls
+        - mountPath: /etc/etcd/tls/etcd-ca
+          name: etcd-ca
+      - args:
+        - etcd-defrag-controller
+        - --namespace
+        - etcd-development
+        command:
+        - control-plane-operator
+        image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:3da8a262643022b1adc457ef33ced943da2de5300d0b546fe786a935bbd6a9f4
+        imagePullPolicy: IfNotPresent
+        name: etcd-defrag
+        resources:
+          requests:
+            cpu: 10m
+            memory: 50Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /etc/etcd/tls/client
+          name: client-tls
+        - mountPath: /etc/etcd/tls/etcd-ca
+          name: etcd-ca
+      dnsPolicy: ClusterFirst
+      initContainers:
+      - args:
+        - -c
+        - exec control-plane-operator resolve-dns ${HOSTNAME}.etcd-discovery.${NAMESPACE}.svc
+        command:
+        - /bin/bash
+        env:
+        - name: NAMESPACE
+          value: etcd-development
+        image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:3da8a262643022b1adc457ef33ced943da2de5300d0b546fe786a935bbd6a9f4
+        imagePullPolicy: IfNotPresent
+        name: ensure-dns
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      - args:
+        - -c
+        - "\n#!/bin/bash\n\nset -eu\n\n# This script checks whether the data directory
+          of this etcd member is empty.\n# If it is, and there is a functional etcd
+          cluster, then it ensures that a member\n# corresponding to this pod does
+          not exist in the cluster so it can be added\n# as a new member.\n\n# Setup
+          the etcdctl environment\nexport ETCDCTL_API=3\nexport ETCDCTL_CACERT=/etc/etcd/tls/etcd-ca/ca.crt\nexport
+          ETCDCTL_CERT=/etc/etcd/tls/server/server.crt\nexport ETCDCTL_KEY=/etc/etcd/tls/server/server.key\nexport
+          ETCDCTL_ENDPOINTS=https://etcd-client:2379\n\nif [[ -f /etc/etcd/clusterstate/existing
+          ]]; then\n  rm /etc/etcd/clusterstate/existing\nfi\n\nif [[ ! -f /var/lib/data/member/snap/db
+          ]]; then\n  echo \"No existing etcd data found\"\n  echo \"Checking if cluster
+          is functional\"\n  if etcdctl member list; then\n    echo \"Cluster is functional\"\n\tMEMBER_ID=$(etcdctl
+          member list -w simple | grep \"${HOSTNAME}\" | awk -F, '{ print $1 }')\n\tif
+          [[ -n \"${MEMBER_ID}\" ]]; then\n\t  echo \"A member with this name (${HOSTNAME})
+          already exists, removing\"\n\t  etcdctl member remove \"${MEMBER_ID}\"\n\t
+          \ echo \"Adding new member\"\n\t  etcdctl member add ${HOSTNAME} --peer-urls
+          https://${HOSTNAME}.etcd-discovery.${NAMESPACE}.svc:2380\n\t  echo \"existing\"
+          > /etc/etcd/clusterstate/existing\n\telse\n\t  echo \"A member does not
+          exist with name (${HOSTNAME}), nothing to do\"\n\tfi\n  else\n    echo \"Cannot
+          list members in cluster, so likely not up yet\"\n  fi\nelse\n  echo \"Snapshot
+          db exists, member has data\"\nfi\n"
+        command:
+        - /bin/bash
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:52a19d768ecd6dddb18ad633b2911615242956645a14f96d340834ef872e8768
+        imagePullPolicy: IfNotPresent
+        name: reset-member
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/lib
+          name: data
+        - mountPath: /etc/etcd/tls/server
+          name: server-tls
+        - mountPath: /etc/etcd/tls/etcd-ca
+          name: etcd-ca
+        - mountPath: /etc/etcd/clusterstate
+          name: cluster-state
+      priorityClassName: hypershift-etcd
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: etcd-defrag-controller
+      serviceAccountName: etcd-defrag-controller
+      terminationGracePeriodSeconds: 30
+      tolerations:
+      - effect: NoSchedule
+        key: hypershift.openshift.io/control-plane
+        operator: Equal
+        value: "true"
+      - effect: NoSchedule
+        key: hypershift.openshift.io/cluster
+        operator: Equal
+        value: etcd-development
+      volumes:
+      - name: peer-tls
+        secret:
+          defaultMode: 420
+          secretName: etcd-peer-tls
+      - name: server-tls
+        secret:
+          defaultMode: 420
+          secretName: etcd-server-tls
+      - name: client-tls
+        secret:
+          defaultMode: 420
+          secretName: etcd-client-tls
+      - configMap:
+          defaultMode: 420
+          name: etcd-ca
+        name: etcd-ca
+      - configMap:
+          defaultMode: 420
+          name: etcd-metrics-ca
+        name: etcd-metrics-ca
+      - emptyDir: {}
+        name: cluster-state
+  updateStrategy:
+    rollingUpdate:
+      partition: 0
+    type: RollingUpdate
+  volumeClaimTemplates:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      creationTimestamp: null
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 8Gi
