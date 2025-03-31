@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- etcd-development.Namespace.yaml
+- etcd-ca.ConfigMap.yaml
+- etcd-client-tls.Secret.yaml
+- etcd-client.Service.yaml
+- etcd-defrag-controller.Role.yaml
+- etcd-defrag-controller.RoleBinding.yaml
+- etcd-defrag-controller.ServiceAccount.yaml
+- etcd-discovery.Service.yaml
+- etcd-metrics-ca.ConfigMap.yaml
+- etcd-peer-tls.Secret.yaml
+- etcd-server-tls.Secret.yaml
+- etcd.PodDisruptionBudget.yaml
+- etcd-development.StatefulSet.yaml
