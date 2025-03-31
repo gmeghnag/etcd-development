@@ -7,7 +7,7 @@ Single-command etcd cluster setup based on [hypershift](https://github.com/opens
 oc apply -k https://github.com/gmeghnag/etcd-development
 ~~~
 
-# Interact
+### Interact
 - Check endpoint status:
 ~~~
 oc exec -n etcd-development etcd-0 -c etcd -- sh -c 'etcdctl --endpoints="https://etcd-0.etcd-discovery.${NAMESPACE}.svc:2379,https://etcd-1.etcd-discovery.${NAMESPACE}.svc:2379,https://etcd-2.etcd-discovery.${NAMESPACE}.svc:2379" --cacert=/etc/etcd/tls/etcd-ca/ca.crt --cert=/etc/etcd/tls/client/etcd-client.crt --key=/etc/etcd/tls/client/etcd-client.key endpoint status -w table'
